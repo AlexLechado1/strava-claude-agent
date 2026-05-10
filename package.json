@@ -1,0 +1,12 @@
+{
+  "name": "strava-claude-agent",
+  "version": "1.0.0",
+  "description": "AI coaching agent that analyzes Strava training sessions using Claude and delivers insights via Telegram",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  }
+}

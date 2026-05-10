@@ -89,3 +89,26 @@ Rating: 8/10 — disciplined execution of a key long session.
 - [ ] Structured output via Claude tool use (JSON analysis + Telegram message as two separate steps)
 - [ ] Multi-athlete support
 - [ ] Web dashboard for training load visualization
+
+## Telegram analysis
+Nueva sesion
+
+Carrera de noche
+5.41km | 25min 1s | 142bpm | 4'37"/km
+
+# 🏃‍♂️ Análisis: Carrera de Noche
+
+**1. Calidad y estímulo fisiológico**
+Sesión de calidad moderada-alta con un estímulo de tempo continuo — corres a 4'37"/km sostenido, lo que representa un esfuerzo aeróbico desarrollado pero no fácil. 💪 La potencia de 290W y cadencia de 88rpm son datos sólidos, aunque esa cadencia está ligeramente por debajo del rango óptimo (90-92rpm) para triatlón, lo que puede costarte energía a largo plazo en el 70.3.
+
+**2. ¿Qué dicen las pulsaciones?** ⚠️
+FC media de 142bpm en Z3 con solo 5.4km es una señal de alerta para fase de base: estás entrenando demasiado intenso para el objetivo de esta etapa. En construcción de base, la mayor parte del volumen debería estar en Z1-Z2 (probablemente ~125-135bpm para ti), no en tempo. Esto no es malo ocasionalmente, pero si es tu patrón habitual, estás quemando adaptaciones que necesitas construir despacio.
+
+**3. Consejo específico para tu 70.3** 🎯
+Con un maratón de 3h29 tienes base de corredor, pero tu 70.3 de Mallorca en 6h indica que el problema no es velocidad pura sino gestión de esfuerzo acumulado. **Prioriza el 80% de tus kilómetros en Z2 real** — aunque se sienta demasiado fácil. La carrera del 70.3 se gana corriendo cómodo los primeros 15km, no aguantando los últimos 5.
+
+**4. Valoración** 🔢
+**5.5/10** — Técnicamente bien ejecutada y con buenas métricas de potencia/cadencia, pero en fase de
+
+9 semanas y 1 dias para Vitoria
+

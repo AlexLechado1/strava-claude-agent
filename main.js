@@ -24,7 +24,7 @@ const ATHLETE = {
   edad: 27,
   objetivo: "70.3 Vitoria sub-5h",
   historial: "Maratón 3h29, 70.3 Mallorca 6h",
-  zonasFCMax: 182,
+  zonasFCMax: 184,  // official; pending 2nd confirmation of 209bpm peak (26 Apr)
   raceDate: new Date("2026-07-12T08:00:00"),
 };
 
@@ -93,10 +93,10 @@ function getHeartZone(avgHR, maxHR) {
   if (!avgHR || !maxHR) return null;
   const pct = (avgHR / maxHR) * 100;
   if (pct < 65) return "Z1 (recovery)";
-  if (pct < 75) return "Z2 (aerobic base)";
-  if (pct < 82) return "Z3 (tempo)";
-  if (pct < 89) return "Z4 (threshold)";
-  return "Z5 (high intensity)";
+  if (pct < 80) return "Z2 (aerobic base)";   // revised: up to 148bpm @ HRmax184
+  if (pct < 89) return "Z3 (tempo)";
+  if (pct < 92) return "Z4 (threshold)";
+  return "Z5 (VO2max)";
 }
 
 function getDaysToRace() {
@@ -236,7 +236,16 @@ const COACH_SYSTEM_PROMPT = `You are an expert triathlon coach specializing in r
 You analyze training data from Strava with precision and give direct, data-driven feedback.
 Always reference specific metrics (pace, HR, watts, distance) in your analysis.
 Speak directly to the athlete by name. Use emojis. Be concise and actionable.
-All responses must be in Spanish.`;
+All responses must be in Spanish.
+
+ATHLETE HEART RATE ZONES (HRmax = 184bpm, revised based on marathon data + Maffetone):
+- Z1 Recovery: <120bpm (<65%)
+- Z2 Aerobic base: 120-148bpm (65-80%) — TARGET: 80% of weekly training time
+- Z3 Tempo / 70.3 race pace: 149-163bpm (81-89%)
+- Z4 Threshold / marathon pace: 164-169bpm (89-92%)
+- Z5 VO2max: >=170bpm (>92%)
+NOTE: HRmax may be higher than 184 (209bpm spike recorded 26 Apr, pending 2nd confirmation).
+Until confirmed, use 184 as reference.`;
 
 async function analyzeActivity(act, recentActivities = []) {
   const tipo = act.type || "Unknown";

@@ -14,8 +14,11 @@ const CONFIG = {
   telegramToken: process.env.TELEGRAM_BOT_TOKEN,
   chatId: process.env.TELEGRAM_CHAT_ID,
   webhookVerifyToken: process.env.STRAVA_WEBHOOK_VERIFY_TOKEN || "strava-claude-agent-2026",
+  intervalsApiKey: process.env.INTERVALS_API_KEY,
+  intervalsAthleteId: process.env.INTERVALS_ATHLETE_ID || "I268707",
   lastActivityId: null,
   lastWeeklySummaryDate: null,
+  lastMorningReadinessDate: null,
   dataFile: "state.json",
   checkInterval: 30 * 60 * 1000,      // 30 min fallback (webhook handles real-time)
   tokenRefreshInterval: 50 * 60 * 1000,
@@ -242,6 +245,46 @@ async function getRecentActivities(days = 7) {
   return [];
 }
 
+// ─── INTERVALS.ICU ───────────────────────────────────────────────────────────
+async function getIntervalsWellness(date) {
+  if (!CONFIG.intervalsApiKey) return null;
+  const credentials = Buffer.from(`API_KEY:${CONFIG.intervalsApiKey}`).toString("base64");
+  try {
+    const data = await httpsRequest({
+      hostname: "intervals.icu",
+      path: `/api/v1/athlete/${CONFIG.intervalsAthleteId}/wellness/${date}`,
+      headers: { Authorization: `Basic ${credentials}` },
+    });
+    if (data?.error || data?.message) return null;
+    return data;
+  } catch (e) {
+    console.log("Intervals.icu error:", e.message);
+    return null;
+  }
+}
+
+function formatWellnessContext(w) {
+  if (!w) return "";
+  const parts = [];
+
+  if (w.ctl != null && w.atl != null) {
+    const tsb = Math.round(w.ctl - w.atl);
+    const form = tsb > 10 ? "muy fresco" : tsb > 0 ? "fresco" : tsb > -10 ? "neutro" : tsb > -25 ? "fatigado" : "muy fatigado";
+    parts.push(`Fitness (CTL): ${Math.round(w.ctl)} | Fatiga (ATL): ${Math.round(w.atl)} | Forma (TSB): ${tsb} (${form})`);
+  }
+  if (w.hrv != null)       parts.push(`HRV rMSSD: ${Math.round(w.hrv)}ms`);
+  if (w.rhr != null)       parts.push(`FC reposo: ${w.rhr}bpm`);
+  if (w.sleepSecs != null) {
+    const h = (w.sleepSecs / 3600).toFixed(1);
+    parts.push(`Sueño: ${h}h${w.sleepScore != null ? ` (puntuación ${w.sleepScore})` : ""}`);
+  }
+  if (w.spO2 != null)      parts.push(`SpO2: ${w.spO2}%`);
+
+  return parts.length
+    ? `\nDATO GARMIN VÍA INTERVALS.ICU (hoy):\n${parts.map((p) => `- ${p}`).join("\n")}`
+    : "";
+}
+
 // ─── CLAUDE ───────────────────────────────────────────────────────────────────
 async function claudePost(systemPrompt, userContent, maxTokens = 500) {
   const body = JSON.stringify({
@@ -304,6 +347,10 @@ async function analyzeActivity(act, recentActivities = []) {
     else ritmoStr = `${(act.average_speed * 3.6).toFixed(1)}km/h`;
   }
 
+  const activityDate = (act.start_date || "").split("T")[0] || new Date().toISOString().split("T")[0];
+  const wellness = await getIntervalsWellness(activityDate);
+  const wellnessContext = formatWellnessContext(wellness);
+
   let cargaSemanal = "";
   if (recentActivities.length > 1) {
     const otras = recentActivities.filter((a) => a.id !== act.id);
@@ -333,7 +380,7 @@ SESSION DATA:
 - Moving time: ${tiempo}
 - HR avg/max: ${fcStr}${zona ? ` → ${zona}` : ""}
 - Pace/speed: ${ritmoStr}
-- Elevation: ${elevacion}${cargaSemanal}
+- Elevation: ${elevacion}${cargaSemanal}${wellnessContext}
 
 Provide a 4-5 sentence analysis:
 1. Overall quality and physiological stimulus
@@ -458,11 +505,49 @@ ${disciplinasStr}`;
   saveState();
 }
 
+// ─── MORNING READINESS ───────────────────────────────────────────────────────
+async function sendMorningReadiness() {
+  const today = new Date().toISOString().split("T")[0];
+  const wellness = await getIntervalsWellness(today);
+  if (!wellness) return;
+
+  const wellnessContext = formatWellnessContext(wellness);
+  if (!wellnessContext) return;
+
+  const tsb = wellness.ctl != null && wellness.atl != null ? Math.round(wellness.ctl - wellness.atl) : null;
+  const diasParaCarrera = getDaysToRace();
+  const fase = diasParaCarrera > 60 ? "base building" : diasParaCarrera > 30 ? "specific build" : diasParaCarrera > 14 ? "peak" : "taper";
+
+  const analisis = await claudePost(
+    COACH_SYSTEM_PROMPT,
+    `Morning readiness check for ${ATHLETE.nombre} (goal: ${ATHLETE.objetivo}, ${diasParaCarrera} days to race, phase: ${fase}).
+
+${wellnessContext.trim()}
+
+Write 2-3 sentences in Spanish: assess today's readiness based on the data (HRV, sleep, TSB), and give one concrete recommendation for today's session (intensity, type, or full rest). Be direct.`,
+    250
+  );
+
+  if (analisis) {
+    await sendTelegram(
+      `☀️ <b>Readiness matutino — ${ATHLETE.nombre}</b>\n\n${wellnessContext.trim()}\n\n${analisis}\n\n<i>${getRaceCountdownStr()}</i>`
+    );
+    CONFIG.lastMorningReadinessDate = new Date().toDateString();
+    console.log("Morning readiness sent.");
+  }
+}
+
 // ─── DAILY SCHEDULER ─────────────────────────────────────────────────────────
 async function dailyScheduler() {
   const now = new Date();
-  if (now.getDay() === 1 && now.getHours() === 8 && CONFIG.lastWeeklySummaryDate !== now.toDateString()) {
+  const todayStr = now.toDateString();
+
+  if (now.getDay() === 1 && now.getHours() === 8 && CONFIG.lastWeeklySummaryDate !== todayStr) {
     await sendWeeklySummary();
+  }
+
+  if (now.getHours() === 7 && CONFIG.lastMorningReadinessDate !== todayStr) {
+    await sendMorningReadiness();
   }
 }
 

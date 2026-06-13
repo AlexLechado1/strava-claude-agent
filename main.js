@@ -471,6 +471,15 @@ async function check() {
       return;
     }
 
+    // On a cold start with no prior state, just record the current activity
+    // without triggering analysis to avoid duplicate messages on restart.
+    if (CONFIG.lastActivityId === null) {
+      console.log(`Cold start — seeding last activity: "${act.name}" (ID: ${act.id})`);
+      CONFIG.lastActivityId = act.id;
+      saveState();
+      return;
+    }
+
     console.log(`New activity: "${act.name}" (ID: ${act.id})`);
     CONFIG.lastActivityId = act.id;
     saveState();
@@ -535,7 +544,9 @@ http
       res.end(JSON.stringify({ status: "ok", endpoints: ["/activities", "/week", "/summary", "/health"] }));
     }
   })
-  .listen(3000, () => console.log("HTTP server on port 3000"));
+  .listen(process.env.PORT || 3000, () =>
+    console.log(`HTTP server on port ${process.env.PORT || 3000}`)
+  );
 
 // ─── STARTUP ──────────────────────────────────────────────────────────────────
 loadState();

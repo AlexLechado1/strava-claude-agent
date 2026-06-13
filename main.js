@@ -599,8 +599,10 @@ http
   .createServer(async (req, res) => {
     res.setHeader("Content-Type", "application/json");
 
-    // Webhook endpoints (must handle both GET and POST)
-    if (req.url.startsWith("/webhook")) {
+    // Webhook registration must come before the general /webhook check
+    if (req.url === "/webhook/subscribe") {
+      await registerWebhook(req, res);
+    } else if (req.url.startsWith("/webhook")) {
       if (req.method === "GET") {
         handleWebhookVerification(req, res);
       } else if (req.method === "POST") {
@@ -609,8 +611,6 @@ http
         res.writeHead(405);
         res.end("Method Not Allowed");
       }
-    } else if (req.url === "/webhook/subscribe") {
-      await registerWebhook(req, res);
     } else if (req.url === "/check") {
       await check();
       res.end(JSON.stringify({ status: "check triggered" }));

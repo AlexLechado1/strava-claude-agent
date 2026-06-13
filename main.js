@@ -2,6 +2,7 @@ require("dotenv").config();
 const https = require("https");
 const http = require("http");
 const fs = require("fs");
+const { URL } = require("url");
 
 // ─── CONFIGURATION ───────────────────────────────────────────────────────────
 const CONFIG = {
@@ -12,10 +13,11 @@ const CONFIG = {
   anthropicKey: process.env.ANTHROPIC_API_KEY,
   telegramToken: process.env.TELEGRAM_BOT_TOKEN,
   chatId: process.env.TELEGRAM_CHAT_ID,
+  webhookVerifyToken: process.env.STRAVA_WEBHOOK_VERIFY_TOKEN || "strava-claude-agent-2026",
   lastActivityId: null,
   lastWeeklySummaryDate: null,
   dataFile: "state.json",
-  checkInterval: 15 * 60 * 1000,
+  checkInterval: 30 * 60 * 1000,      // 30 min fallback (webhook handles real-time)
   tokenRefreshInterval: 50 * 60 * 1000,
 };
 
@@ -24,7 +26,7 @@ const ATHLETE = {
   edad: 27,
   objetivo: "70.3 Vitoria sub-5h",
   historial: "Maratón 3h29, 70.3 Mallorca 6h",
-  zonasFCMax: 184,  // official; pending 2nd confirmation of 209bpm peak (26 Apr)
+  zonasFCMax: 190,
   raceDate: new Date("2026-07-12T08:00:00"),
 };
 
@@ -38,9 +40,14 @@ function loadState() {
       if (s.accessToken) CONFIG.accessToken = s.accessToken;
       if (s.lastWeeklySummaryDate) CONFIG.lastWeeklySummaryDate = s.lastWeeklySummaryDate;
       console.log("State loaded. Last activity ID:", CONFIG.lastActivityId);
+    } else {
+      // Cold start: mark today to avoid duplicate weekly summary on restart
+      CONFIG.lastWeeklySummaryDate = new Date().toDateString();
+      console.log("No prior state, starting fresh.");
     }
   } catch (e) {
-    console.log("No prior state, starting fresh.");
+    CONFIG.lastWeeklySummaryDate = new Date().toDateString();
+    console.log("State load error, starting fresh.");
   }
 }
 
@@ -93,7 +100,7 @@ function getHeartZone(avgHR, maxHR) {
   if (!avgHR || !maxHR) return null;
   const pct = (avgHR / maxHR) * 100;
   if (pct < 65) return "Z1 (recovery)";
-  if (pct < 80) return "Z2 (aerobic base)";   // revised: up to 148bpm @ HRmax184
+  if (pct < 80) return "Z2 (aerobic base)";
   if (pct < 89) return "Z3 (tempo)";
   if (pct < 92) return "Z4 (threshold)";
   return "Z5 (VO2max)";
@@ -130,6 +137,38 @@ function httpsRequest(opts, body = null) {
     if (body) req.write(body);
     req.end();
   });
+}
+
+// ─── TELEGRAM ─────────────────────────────────────────────────────────────────
+async function sendTelegram(msg) {
+  const body = JSON.stringify({ chat_id: CONFIG.chatId, text: msg, parse_mode: "HTML" });
+  const res = await httpsRequest(
+    {
+      hostname: "api.telegram.org",
+      path: "/bot" + CONFIG.telegramToken + "/sendMessage",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body),
+      },
+    },
+    body
+  );
+  if (res.ok) {
+    console.log("Telegram: message sent OK");
+  } else {
+    console.log("Telegram error:", JSON.stringify(res));
+  }
+}
+
+async function sendErrorAlert(context, errorMsg) {
+  try {
+    await sendTelegram(
+      `🔴 <b>Agent Error</b>\n\n<b>Where:</b> ${context}\n<b>Error:</b> ${errorMsg}\n\n<i>Check Render logs for details.</i>`
+    );
+  } catch (e) {
+    console.log("Could not send error alert:", e.message);
+  }
 }
 
 // ─── STRAVA ───────────────────────────────────────────────────────────────────
@@ -234,18 +273,16 @@ async function claudePost(systemPrompt, userContent, maxTokens = 500) {
 
 const COACH_SYSTEM_PROMPT = `You are an expert triathlon coach specializing in running, cycling, and swimming.
 You analyze training data from Strava with precision and give direct, data-driven feedback.
-Always reference specific metrics (pace, HR, watts, distance) in your analysis.
+Always reference specific metrics (pace, HR, distance) in your analysis.
 Speak directly to the athlete by name. Use emojis. Be concise and actionable.
 All responses must be in Spanish.
 
-ATHLETE HEART RATE ZONES (HRmax = 184bpm, revised based on marathon data + Maffetone):
-- Z1 Recovery: <120bpm (<65%)
-- Z2 Aerobic base: 120-148bpm (65-80%) — TARGET: 80% of weekly training time
-- Z3 Tempo / 70.3 race pace: 149-163bpm (81-89%)
-- Z4 Threshold / marathon pace: 164-169bpm (89-92%)
-- Z5 VO2max: >=170bpm (>92%)
-NOTE: HRmax may be higher than 184 (209bpm spike recorded 26 Apr, pending 2nd confirmation).
-Until confirmed, use 184 as reference.`;
+ATHLETE HEART RATE ZONES (HRmax = 190bpm, confirmed):
+- Z1 Recovery: <124bpm (<65%)
+- Z2 Aerobic base: 124-152bpm (65-80%) — TARGET: 80% of weekly training time
+- Z3 Tempo / 70.3 race pace: 153-169bpm (81-89%)
+- Z4 Threshold / marathon pace: 170-175bpm (89-92%)
+- Z5 VO2max: >=176bpm (>92%)`;
 
 async function analyzeActivity(act, recentActivities = []) {
   const tipo = act.type || "Unknown";
@@ -266,9 +303,6 @@ async function analyzeActivity(act, recentActivities = []) {
     else if (esNatacion) ritmoStr = formatSwimPace(act.average_speed);
     else ritmoStr = `${(act.average_speed * 3.6).toFixed(1)}km/h`;
   }
-
-  const wattsStr = act.average_watts ? `${Math.round(act.average_watts)}W` : null;
-  const cadenciaStr = act.average_cadence ? `${Math.round(act.average_cadence)}rpm` : null;
 
   let cargaSemanal = "";
   if (recentActivities.length > 1) {
@@ -299,7 +333,7 @@ SESSION DATA:
 - Moving time: ${tiempo}
 - HR avg/max: ${fcStr}${zona ? ` → ${zona}` : ""}
 - Pace/speed: ${ritmoStr}
-- Elevation: ${elevacion}${wattsStr ? `\n- Power: ${wattsStr}` : ""}${cadenciaStr ? `\n- Cadence: ${cadenciaStr}` : ""}${cargaSemanal}
+- Elevation: ${elevacion}${cargaSemanal}
 
 Provide a 4-5 sentence analysis:
 1. Overall quality and physiological stimulus
@@ -319,8 +353,7 @@ async function checkOvertraining(activities) {
     .filter((d, i, arr) => arr.indexOf(d) === i)
     .sort();
 
-  let maxStreak = 1,
-    currentStreak = 1;
+  let maxStreak = 1, currentStreak = 1;
   for (let i = 1; i < sortedDates.length; i++) {
     const diffDays =
       (new Date(sortedDates[i]) - new Date(sortedDates[i - 1])) / (1000 * 60 * 60 * 24);
@@ -433,29 +466,7 @@ async function dailyScheduler() {
   }
 }
 
-// ─── TELEGRAM ─────────────────────────────────────────────────────────────────
-async function sendTelegram(msg) {
-  const body = JSON.stringify({ chat_id: CONFIG.chatId, text: msg, parse_mode: "HTML" });
-  const res = await httpsRequest(
-    {
-      hostname: "api.telegram.org",
-      path: "/bot" + CONFIG.telegramToken + "/sendMessage",
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(body),
-      },
-    },
-    body
-  );
-  if (res.ok) {
-    console.log("Telegram: message sent OK");
-  } else {
-    console.log("Telegram error:", JSON.stringify(res));
-  }
-}
-
-// ─── MAIN LOOP ────────────────────────────────────────────────────────────────
+// ─── MAIN CHECK ───────────────────────────────────────────────────────────────
 async function check() {
   const now = new Date().toLocaleString("es-ES");
   console.log(`[${now}] Checking Strava...`);
@@ -471,8 +482,7 @@ async function check() {
       return;
     }
 
-    // On a cold start with no prior state, just record the current activity
-    // without triggering analysis to avoid duplicate messages on restart.
+    // Cold start: seed the current activity without triggering analysis
     if (CONFIG.lastActivityId === null) {
       console.log(`Cold start — seeding last activity: "${act.name}" (ID: ${act.id})`);
       CONFIG.lastActivityId = act.id;
@@ -481,8 +491,6 @@ async function check() {
     }
 
     console.log(`New activity: "${act.name}" (ID: ${act.id})`);
-    CONFIG.lastActivityId = act.id;
-    saveState();
 
     const recentActivities = await getRecentActivities(7);
     const analisis = await analyzeActivity(act, recentActivities);
@@ -498,11 +506,92 @@ async function check() {
         : "";
 
     const msg = `🏃 <b>New session</b>\n\n<b>${act.name}</b>\n${dist} | ${tiempo}${hrStr}${speedStr}\n\n${analisis}\n\n<i>${getRaceCountdownStr()}</i>`;
+
     await sendTelegram(msg);
+
+    // Save state AFTER successful Telegram send
+    CONFIG.lastActivityId = act.id;
+    saveState();
+
     await checkOvertraining(recentActivities);
   } catch (e) {
     console.log("Error in check():", e.message);
+    await sendErrorAlert("check()", e.message);
   }
+}
+
+// ─── STRAVA WEBHOOK ───────────────────────────────────────────────────────────
+function handleWebhookVerification(req, res) {
+  try {
+    const urlObj = new URL(req.url, `http://${req.headers.host}`);
+    const mode = urlObj.searchParams.get("hub.mode");
+    const token = urlObj.searchParams.get("hub.verify_token");
+    const challenge = urlObj.searchParams.get("hub.challenge");
+
+    if (mode === "subscribe" && token === CONFIG.webhookVerifyToken) {
+      console.log("Webhook verified by Strava.");
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ "hub.challenge": challenge }));
+    } else {
+      console.log("Webhook verification failed — wrong token.");
+      res.writeHead(403);
+      res.end("Forbidden");
+    }
+  } catch (e) {
+    res.writeHead(500);
+    res.end("Error");
+  }
+}
+
+function handleWebhookEvent(req, res) {
+  // Respond immediately — Strava requires a fast 200
+  res.writeHead(200);
+  res.end("OK");
+
+  let body = "";
+  req.on("data", (chunk) => (body += chunk));
+  req.on("end", async () => {
+    try {
+      const event = JSON.parse(body);
+      console.log("Webhook event received:", JSON.stringify(event));
+      if (event.object_type === "activity" && event.aspect_type === "create") {
+        console.log("New activity via webhook, triggering check...");
+        await check();
+      }
+    } catch (e) {
+      console.log("Webhook parse error:", e.message);
+    }
+  });
+}
+
+async function registerWebhook(req, res) {
+  const host = req.headers.host;
+  const callbackUrl = `https://${host}/webhook`;
+  console.log("Registering webhook with callback:", callbackUrl);
+
+  const body = new URLSearchParams({
+    client_id: CONFIG.clientId,
+    client_secret: CONFIG.clientSecret,
+    callback_url: callbackUrl,
+    verify_token: CONFIG.webhookVerifyToken,
+  }).toString();
+
+  const data = await httpsRequest(
+    {
+      hostname: "www.strava.com",
+      path: "/api/v3/push_subscriptions",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Length": Buffer.byteLength(body),
+      },
+    },
+    body
+  );
+
+  console.log("Webhook registration response:", JSON.stringify(data));
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(data));
 }
 
 // ─── HTTP SERVER ──────────────────────────────────────────────────────────────
@@ -510,7 +599,22 @@ http
   .createServer(async (req, res) => {
     res.setHeader("Content-Type", "application/json");
 
-    if (req.url === "/activities") {
+    // Webhook endpoints (must handle both GET and POST)
+    if (req.url.startsWith("/webhook")) {
+      if (req.method === "GET") {
+        handleWebhookVerification(req, res);
+      } else if (req.method === "POST") {
+        handleWebhookEvent(req, res);
+      } else {
+        res.writeHead(405);
+        res.end("Method Not Allowed");
+      }
+    } else if (req.url === "/webhook/subscribe") {
+      await registerWebhook(req, res);
+    } else if (req.url === "/check") {
+      await check();
+      res.end(JSON.stringify({ status: "check triggered" }));
+    } else if (req.url === "/activities") {
       const acts = await stravaGet("/api/v3/athlete/activities?per_page=20");
       res.end(JSON.stringify(acts));
     } else if (req.url === "/week") {
@@ -541,7 +645,12 @@ http
         })
       );
     } else {
-      res.end(JSON.stringify({ status: "ok", endpoints: ["/activities", "/week", "/summary", "/health"] }));
+      res.end(
+        JSON.stringify({
+          status: "ok",
+          endpoints: ["/activities", "/week", "/summary", "/health", "/check", "/webhook/subscribe"],
+        })
+      );
     }
   })
   .listen(process.env.PORT || 3000, () =>
@@ -552,7 +661,7 @@ http
 loadState();
 refreshAccessToken().then(() => {
   console.log(`Agent started. ${getRaceCountdownStr()}.`);
-  sendTelegram(`🏊 Strava-Claude Agent activated. ${getRaceCountdownStr()}. Let's go, ${ATHLETE.nombre}!`);
+  sendTelegram(`🏊 <b>Strava-Claude Agent activated</b>\n\n${getRaceCountdownStr()}. Let's go, ${ATHLETE.nombre}!`);
   check();
   setInterval(check, CONFIG.checkInterval);
   setInterval(refreshAccessToken, CONFIG.tokenRefreshInterval);

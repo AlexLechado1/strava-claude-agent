@@ -15,7 +15,7 @@ const CONFIG = {
   chatId: process.env.TELEGRAM_CHAT_ID,
   webhookVerifyToken: process.env.STRAVA_WEBHOOK_VERIFY_TOKEN || "strava-claude-agent-2026",
   intervalsApiKey: process.env.INTERVALS_API_KEY,
-  intervalsAthleteId: process.env.INTERVALS_ATHLETE_ID || "I268707",
+  intervalsAthleteId: (process.env.INTERVALS_ATHLETE_ID || "i268707").toLowerCase(),
   lastActivityId: null,
   lastWeeklySummaryDate: null,
   lastMorningReadinessDate: null,

@@ -273,7 +273,7 @@ function formatWellnessContext(w) {
     parts.push(`Fitness (CTL): ${Math.round(w.ctl)} | Fatiga (ATL): ${Math.round(w.atl)} | Forma (TSB): ${tsb} (${form})`);
   }
   if (w.hrv != null)       parts.push(`HRV rMSSD: ${Math.round(w.hrv)}ms`);
-  if (w.rhr != null)       parts.push(`FC reposo: ${w.rhr}bpm`);
+  if (w.restingHR != null) parts.push(`FC reposo: ${w.restingHR}bpm`);
   if (w.sleepSecs != null) {
     const h = (w.sleepSecs / 3600).toFixed(1);
     parts.push(`Sueño: ${h}h${w.sleepScore != null ? ` (puntuación ${w.sleepScore})` : ""}`);
@@ -382,11 +382,12 @@ SESSION DATA:
 - Pace/speed: ${ritmoStr}
 - Elevation: ${elevacion}${cargaSemanal}${wellnessContext}
 
-Provide a 4-5 sentence analysis:
+Provide a 4-5 sentence analysis. You MUST reference the Garmin wellness data if present (HRV, sleep, TSB) — explain how recovery state affected or should have affected this session:
 1. Overall quality and physiological stimulus
 2. What the HR data tells you and whether it fits the current phase (${fase})
-3. One specific recommendation for improvement toward the 70.3
-4. Rating 1-10 with brief justification`;
+3. How the recovery data (sleep, HRV, TSB) contextualises this session — was it the right day for this effort?
+4. One specific recommendation for improvement toward the 70.3
+5. Rating 1-10 with brief justification`;
 
   return (await claudePost(COACH_SYSTEM_PROMPT, userContent, 500)) || "Analysis unavailable.";
 }
@@ -720,6 +721,20 @@ http
     } else if (req.url === "/summary") {
       await sendWeeklySummary();
       res.end(JSON.stringify({ status: "weekly summary sent via Telegram" }));
+    } else if (req.url === "/analyze-last") {
+      const act = await getLatestActivity();
+      if (!act) {
+        res.end(JSON.stringify({ error: "No activities found" }));
+      } else {
+        res.end(JSON.stringify({ status: "analyzing", activity: act.name, date: act.start_date }));
+        const recentActivities = await getRecentActivities(7);
+        const analisis = await analyzeActivity(act, recentActivities);
+        const dist = formatDistance(act.distance, act.type);
+        const tiempo = formatTime(act.moving_time);
+        const hrStr = act.average_heartrate ? ` | ${Math.round(act.average_heartrate)}bpm` : "";
+        const msg = `🔍 <b>Análisis forzado</b>\n\n<b>${act.name}</b>\n${dist} | ${tiempo}${hrStr}\n\n${analisis}\n\n<i>${getRaceCountdownStr()}</i>`;
+        await sendTelegram(msg);
+      }
     } else if (req.url === "/wellness") {
       const today = new Date().toISOString().split("T")[0];
       const wellness = await getIntervalsWellness(today);

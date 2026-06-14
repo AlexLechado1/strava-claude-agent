@@ -722,17 +722,8 @@ http
       res.end(JSON.stringify({ status: "weekly summary sent via Telegram" }));
     } else if (req.url === "/wellness") {
       const today = new Date().toISOString().split("T")[0];
-      if (!CONFIG.intervalsApiKey) {
-        res.end(JSON.stringify({ error: "INTERVALS_API_KEY not set" }));
-      } else {
-        const credentials = Buffer.from(`API_KEY:${CONFIG.intervalsApiKey}`).toString("base64");
-        const raw = await httpsRequest({
-          hostname: "intervals.icu",
-          path: `/api/v1/athlete/${CONFIG.intervalsAthleteId}/wellness/${today}`,
-          headers: { Authorization: `Basic ${credentials}` },
-        });
-        res.end(JSON.stringify({ date: today, athleteId: CONFIG.intervalsAthleteId, raw }, null, 2));
-      }
+      const wellness = await getIntervalsWellness(today);
+      res.end(JSON.stringify(wellness || { error: "No data or connection failed" }, null, 2));
     } else if (req.url === "/health") {
       res.end(
         JSON.stringify({

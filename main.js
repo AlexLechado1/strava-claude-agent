@@ -720,6 +720,10 @@ http
     } else if (req.url === "/summary") {
       await sendWeeklySummary();
       res.end(JSON.stringify({ status: "weekly summary sent via Telegram" }));
+    } else if (req.url === "/wellness") {
+      const today = new Date().toISOString().split("T")[0];
+      const wellness = await getIntervalsWellness(today);
+      res.end(JSON.stringify(wellness || { error: "No data or connection failed" }, null, 2));
     } else if (req.url === "/health") {
       res.end(
         JSON.stringify({

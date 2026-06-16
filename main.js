@@ -327,7 +327,7 @@ ATHLETE HEART RATE ZONES (HRmax = 190bpm, confirmed):
 - Z4 Threshold / marathon pace: 170-175bpm (89-92%)
 - Z5 VO2max: >=176bpm (>92%)`;
 
-async function analyzeActivity(act, recentActivities = []) {
+async function analyzeActivity(act, recentActivities = [], wellness = null) {
   const tipo = act.type || "Unknown";
   const esCarrera = tipo.toLowerCase().includes("run");
   const esNatacion = tipo.toLowerCase().includes("swim");
@@ -347,9 +347,8 @@ async function analyzeActivity(act, recentActivities = []) {
     else ritmoStr = `${(act.average_speed * 3.6).toFixed(1)}km/h`;
   }
 
-  const activityDate = (act.start_date || "").split("T")[0] || new Date().toISOString().split("T")[0];
-  const wellness = await getIntervalsWellness(activityDate);
   const wellnessContext = formatWellnessContext(wellness);
+  console.log("Wellness context for analysis:", wellnessContext || "(none)");
 
   let cargaSemanal = "";
   if (recentActivities.length > 1) {
@@ -578,8 +577,12 @@ async function check() {
 
     console.log(`New activity: "${act.name}" (ID: ${act.id})`);
 
+    const activityDate = (act.start_date || "").split("T")[0] || new Date().toISOString().split("T")[0];
+    const wellness = await getIntervalsWellness(activityDate);
+    console.log(`Wellness for ${activityDate}:`, wellness ? `HRV=${wellness.hrv} sleep=${wellness.sleepSecs}s` : "null");
+
     const recentActivities = await getRecentActivities(7);
-    const analisis = await analyzeActivity(act, recentActivities);
+    const analisis = await analyzeActivity(act, recentActivities, wellness);
 
     const dist = formatDistance(act.distance, act.type);
     const tiempo = formatTime(act.moving_time);
@@ -591,7 +594,17 @@ async function check() {
         ? ` | ${(act.average_speed * 3.6).toFixed(1)}km/h`
         : "";
 
-    const msg = `🏃 <b>New session</b>\n\n<b>${act.name}</b>\n${dist} | ${tiempo}${hrStr}${speedStr}\n\n${analisis}\n\n<i>${getRaceCountdownStr()}</i>`;
+    // Build wellness line for message header
+    let wellnessLine = "";
+    if (wellness) {
+      const parts = [];
+      if (wellness.sleepSecs != null) parts.push(`😴 ${(wellness.sleepSecs / 3600).toFixed(1)}h sueño (${wellness.sleepScore ?? "-"})`);
+      if (wellness.hrv != null)       parts.push(`💓 HRV ${Math.round(wellness.hrv)}ms`);
+      if (wellness.ctl != null && wellness.atl != null) parts.push(`📊 TSB ${Math.round(wellness.ctl - wellness.atl)}`);
+      if (parts.length) wellnessLine = `\n${parts.join(" | ")}`;
+    }
+
+    const msg = `🏃 <b>New session</b>\n\n<b>${act.name}</b>\n${dist} | ${tiempo}${hrStr}${speedStr}${wellnessLine}\n\n${analisis}\n\n<i>${getRaceCountdownStr()}</i>`;
 
     await sendTelegram(msg);
 

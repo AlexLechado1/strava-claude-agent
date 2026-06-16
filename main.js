@@ -381,12 +381,14 @@ SESSION DATA:
 - Pace/speed: ${ritmoStr}
 - Elevation: ${elevacion}${cargaSemanal}${wellnessContext}
 
-Provide a 4-5 sentence analysis. You MUST reference the Garmin wellness data if present (HRV, sleep, TSB) — explain how recovery state affected or should have affected this session:
-1. Overall quality and physiological stimulus
-2. What the HR data tells you and whether it fits the current phase (${fase})
-3. How the recovery data (sleep, HRV, TSB) contextualises this session — was it the right day for this effort?
-4. One specific recommendation for improvement toward the 70.3
-5. Rating 1-10 with brief justification`;
+IMPORTANT: If wellness data is present, it must SHAPE the entire analysis — not just be mentioned. A session done on poor sleep or negative TSB must be rated and interpreted differently than the same session done fresh. Adjust your quality assessment, intensity recommendation and rating accordingly.
+
+Provide a 4-5 sentence analysis:
+1. Overall quality and physiological stimulus — adjusted for recovery state if data is available
+2. What the HR data tells you in context (was the effort harder than it looks because of fatigue/poor sleep?)
+3. Direct verdict on the recovery data: was it the right day for this effort given HRV, sleep and TSB?
+4. One concrete recommendation for the next 24-48h (rest, intensity, sleep target)
+5. Rating 1-10 — if recovery was compromised, explain whether the rating reflects the absolute session or the relative effort given the state`;
 
   return (await claudePost(COACH_SYSTEM_PROMPT, userContent, 500)) || "Analysis unavailable.";
 }

@@ -325,7 +325,108 @@ ATHLETE HEART RATE ZONES (HRmax = 190bpm, confirmed):
 - Z2 Aerobic base: 124-152bpm (65-80%) — TARGET: 80% of weekly training time
 - Z3 Tempo / 70.3 race pace: 153-169bpm (81-89%)
 - Z4 Threshold / marathon pace: 170-175bpm (89-92%)
-- Z5 VO2max: >=176bpm (>92%)`;
+- Z5 VO2max: >=176bpm (>92%)
+
+ANALYSIS FRAMEWORK — you MUST use these exact labels, one per line, no markdown, no extra text before ESTADO:
+ESTADO: Verde | Amarillo | Rojo
+LECTURA: (max 2 sentences — session quality + recovery context combined)
+TENDENCIA: (max 1 sentence — is the week/block on track?)
+ACCIÓN INMEDIATA: (max 1 sentence — one concrete action for next 24-48h)
+ACCIÓN A MEDIO PLAZO: (max 1 sentence — one plan adjustment, or "Mantener plan.")
+
+Start your response with ESTADO: and nothing else before it.`;
+
+async function getActivityZones(activityId) {
+  try {
+    const data = await stravaGet(`/api/v3/activities/${activityId}/zones`);
+    const hrZone = Array.isArray(data) ? data.find((z) => z.type === "heartrate") : null;
+    if (!hrZone?.distribution_buckets) return null;
+    const buckets = hrZone.distribution_buckets;
+    const totalSecs = buckets.reduce((s, b) => s + b.time, 0);
+    if (totalSecs === 0) return null;
+    return buckets
+      .map((b, i) => `Z${i + 1}: ${Math.round((b.time / totalSecs) * 100)}% (${formatTime(b.time)})`)
+      .join(" | ");
+  } catch {
+    return null;
+  }
+}
+
+function buildTrendContext(act, recentActivities) {
+  const tipo = (act.type || "").toLowerCase();
+  if (!tipo.includes("run") && !tipo.includes("ride")) return "";
+  if (!act.average_speed || !act.average_heartrate) return "";
+
+  const similares = recentActivities
+    .filter(
+      (a) =>
+        a.id !== act.id &&
+        (act.type || "") === (a.type || "") &&
+        a.average_speed &&
+        a.average_heartrate &&
+        a.distance > 3000
+    )
+    .slice(0, 4);
+
+  if (similares.length < 2) return "";
+
+  const ratio = (a) => (1000 / a.average_speed) / a.average_heartrate;
+  const currentRatio = ratio(act);
+  const avgPrevRatio = similares.reduce((s, a) => s + ratio(a), 0) / similares.length;
+  const diffPct = Math.round(((avgPrevRatio - currentRatio) / avgPrevRatio) * 100);
+
+  const trend =
+    diffPct > 0
+      ? `✅ +${diffPct}% más eficiente que la media de las últimas ${similares.length} sesiones similares`
+      : diffPct < 0
+      ? `⚠️ ${Math.abs(diffPct)}% menos eficiente que la media de las últimas ${similares.length} sesiones similares`
+      : `→ Eficiencia igual a la media reciente`;
+
+  const esCarrera = tipo.includes("run");
+  const prevPaces = similares.map((a) =>
+    esCarrera ? formatPace(a.average_speed) : `${(a.average_speed * 3.6).toFixed(1)}km/h`
+  );
+
+  return `\nTENDENCIA AERÓBICA (ratio pace:FC):\n- Sesiones anteriores: ${prevPaces.join(", ")}\n- ${trend}`;
+}
+
+function buildVitoriaContext(act) {
+  const tipo = (act.type || "").toLowerCase();
+  if (!act.average_speed) return "";
+
+  if (tipo.includes("run")) {
+    const paceSecPerKm = 1000 / act.average_speed;
+    const diff = Math.round(paceSecPerKm - 5 * 60);
+    let assessment;
+    if (paceSecPerKm > 6 * 60)       assessment = "⚠️ Hay trabajo por hacer — pace Z2 aún lejos del objetivo de carrera";
+    else if (paceSecPerKm > 5.5 * 60) assessment = "🟡 En desarrollo — vas por buen camino con margen por ganar";
+    else if (paceSecPerKm > 5 * 60)   assessment = "🟢 Dentro del rango objetivo para el run de Vitoria";
+    else                               assessment = "🟢 Por encima del pace objetivo — foco en resistencia específica";
+    return `\nPOSICIONAMIENTO VS VITORIA (run leg ~5:00–5:30/km objetivo):\n- Pace de hoy: ${formatPace(act.average_speed)} (${diff > 0 ? "+" : ""}${diff}s/km vs objetivo mínimo)\n- ${assessment}`;
+  }
+
+  if (tipo.includes("ride")) {
+    const kmh = act.average_speed * 3.6;
+    const diff = (kmh - 37).toFixed(1);
+    const assessment =
+      kmh >= 37 ? "🟢 Por encima de la velocidad objetivo para el segmento de bici" :
+      kmh >= 34 ? "🟡 Normal en rodaje Z2 — revisar en sesiones específicas de ritmo" :
+                  "⚠️ Por debajo del objetivo — revisar potencia y posición";
+    return `\nPOSICIONAMIENTO VS VITORIA (bici 90km, objetivo ~37km/h en ritmo de carrera):\n- Velocidad de hoy: ${kmh.toFixed(1)}km/h (${diff > 0 ? "+" : ""}${diff}km/h vs objetivo)\n- ${assessment}`;
+  }
+
+  if (tipo.includes("swim")) {
+    const secsPer100m = 100 / act.average_speed;
+    const diff = Math.round(secsPer100m - 120);
+    const assessment =
+      secsPer100m <= 120 ? "🟢 Ritmo compatible con el objetivo de natación (~38-42min)" :
+      secsPer100m <= 140 ? "🟡 Dentro del rango — trabajar resistencia en agua abierta" :
+                           "⚠️ Ritmo a mejorar para llegar a T1 en condiciones";
+    return `\nPOSICIONAMIENTO VS VITORIA (natación 1.9km, objetivo ~2:00/100m):\n- Ritmo de hoy: ${formatSwimPace(act.average_speed)} (${diff > 0 ? "+" : ""}${diff}s/100m vs objetivo)\n- ${assessment}`;
+  }
+
+  return "";
+}
 
 async function analyzeActivity(act, recentActivities = [], wellness = null) {
   const tipo = act.type || "Unknown";
@@ -358,15 +459,30 @@ async function analyzeActivity(act, recentActivities = [], wellness = null) {
     cargaSemanal = `\nWeekly load so far (excl. this session): ${totalKm.toFixed(0)}km in ${Math.round(totalMin)}min (${otras.length} sessions)`;
   }
 
+  // Brick detection
+  const actStart = new Date(act.start_date).getTime();
+  const brickPrior = recentActivities.find((a) => {
+    if (a.id === act.id) return false;
+    const priorEnd = new Date(a.start_date).getTime() + (a.elapsed_time || a.moving_time || 0) * 1000;
+    const gapMins = (actStart - priorEnd) / 60000;
+    return gapMins >= 0 && gapMins <= 180;
+  });
+  let brickContext = "";
+  if (brickPrior) {
+    const gapMins = Math.round((actStart - (new Date(brickPrior.start_date).getTime() + (brickPrior.elapsed_time || brickPrior.moving_time) * 1000)) / 60000);
+    brickContext = `\n⚠️ BRICK SESSION: This run was done ${gapMins} min after completing a ${brickPrior.type} (${formatDistance(brickPrior.distance, brickPrior.type)} in ${formatTime(brickPrior.moving_time)}). Elevated HR and reduced pace are expected and NORMAL — interpret this as a brick, not as a standalone run.`;
+  }
+
+  const zones = await getActivityZones(act.id);
+  const zonesStr = zones ? `\n- Zone distribution: ${zones}` : "";
+  const trendContext = buildTrendContext(act, recentActivities);
+  const vitoriaContext = buildVitoriaContext(act);
+
   const diasParaCarrera = getDaysToRace();
   const fase =
-    diasParaCarrera > 60
-      ? "base building"
-      : diasParaCarrera > 30
-      ? "specific build"
-      : diasParaCarrera > 14
-      ? "peak"
-      : "taper";
+    diasParaCarrera > 60 ? "base building" :
+    diasParaCarrera > 30 ? "specific build" :
+    diasParaCarrera > 14 ? "peak" : "taper";
 
   const userContent = `Analyze this training session for ${ATHLETE.nombre} (${ATHLETE.edad}yo male).
 Goal: ${ATHLETE.objetivo}. Background: ${ATHLETE.historial}.
@@ -379,16 +495,9 @@ SESSION DATA:
 - Moving time: ${tiempo}
 - HR avg/max: ${fcStr}${zona ? ` → ${zona}` : ""}
 - Pace/speed: ${ritmoStr}
-- Elevation: ${elevacion}${cargaSemanal}${wellnessContext}
+- Elevation: ${elevacion}${zonesStr}${cargaSemanal}${trendContext}${vitoriaContext}${wellnessContext}
 
-IMPORTANT: If wellness data is present, it must SHAPE the entire analysis — not just be mentioned. A session done on poor sleep or negative TSB must be rated and interpreted differently than the same session done fresh. Adjust your quality assessment, intensity recommendation and rating accordingly.
-
-Provide a 4-5 sentence analysis:
-1. Overall quality and physiological stimulus — adjusted for recovery state if data is available
-2. What the HR data tells you in context (was the effort harder than it looks because of fatigue/poor sleep?)
-3. Direct verdict on the recovery data: was it the right day for this effort given HRV, sleep and TSB?
-4. One concrete recommendation for the next 24-48h (rest, intensity, sleep target)
-5. Rating 1-10 — if recovery was compromised, explain whether the rating reflects the absolute session or the relative effort given the state`;
+IMPORTANT: If wellness data is present, it must SHAPE the entire analysis — not just be mentioned.${brickContext}`;
 
   return (await claudePost(COACH_SYSTEM_PROMPT, userContent, 500)) || "Analysis unavailable.";
 }
